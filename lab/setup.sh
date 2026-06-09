@@ -63,8 +63,15 @@ kubectl patch configmap argocd-cm -n argocd --type=merge \
   -p '{"data":{"timeout.reconciliation":"30s"}}'
 ok "Sync interval set to 30s"
 
+# Wait for the initial admin secret (created by ArgoCD init job, not the deployment)
+info "Waiting for ArgoCD admin secret..."
+for i in $(seq 1 20); do
+  kubectl get secret argocd-initial-admin-secret -n argocd &>/dev/null && break
+  sleep 3
+done
+
 ARGO_PASS=$(kubectl get secret argocd-initial-admin-secret \
-  -n argocd -o jsonpath="{.data.password}" | base64 -d)
+  -n argocd -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null) || ARGO_PASS=""
 
 # ─── Stakater Reloader ────────────────────────────────────────────────────────
 # Reloader watches ConfigMaps and automatically rolls Deployments when they change.
@@ -119,8 +126,13 @@ ok "demo-app ready"
 # ─── Summary ──────────────────────────────────────────────────────────────────
 section "Lab ready"
 echo -e "  ${G}demo-app      ${N}→ ${C}http://localhost:8081${N}"
-echo -e "  ${G}ArgoCD UI     ${N}→ ${C}https://localhost:8080${N}"
-echo -e "               username: ${C}admin${N}  password: ${C}${ARGO_PASS}${N}"
+echo -e "  ${G}ArgoCD UI     ${N}→ ${C}https://localhost:8080${N}  (accepter le cert auto-signé)"
+if [ -n "$ARGO_PASS" ]; then
+  echo -e "               username: ${C}admin${N}  password: ${C}${ARGO_PASS}${N}"
+else
+  echo -e "               username: ${C}admin${N}  password: récupérer avec :"
+  echo -e "               ${C}kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d${N}"
+fi
 echo -e "  ${Y}K8s Dashboard ${N}→ optionnel : ${C}./lab/install-dashboard.sh${N}"
 echo ""
 echo "Demo flow:"

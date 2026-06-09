@@ -66,7 +66,7 @@ echo ""
 source "$REPO_ROOT/agent/.env" 2>/dev/null || true
 export REPO_PATH="$REPO_ROOT"
 
-cd "$REPO_ROOT/agent" && python main.py
+cd "$REPO_ROOT/agent" && python3 main.py
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 banner "DEMO COMPLETE"

@@ -1,15 +1,24 @@
 #!/bin/bash
-# break.sh — Inject a malformed DATABASE_URL into Git → ArgoCD syncs → pods crash
+# break.sh — Inject a malformed DATABASE_URL into ia-ops-argo-app → ArgoCD syncs → pods crash
 #
-# This simulates a bad deployment reaching production via GitOps.
-# Stakater Reloader will restart the pods as soon as ArgoCD applies the ConfigMap.
+# Requires: ia-ops-argo-app cloned locally.
+# Default location: ../ia-ops-argo-app  (override with ARGO_REPO env var)
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$REPO_ROOT/apps/demo-app/k8s/configmap.yaml"
+ARGO_REPO="${ARGO_REPO:-$(cd "$(dirname "$0")/../../ia-ops-argo-app" 2>/dev/null && pwd)}"
 
-echo "⚡ Injecting broken DATABASE_URL into Git..."
+if [ ! -d "$ARGO_REPO" ]; then
+  echo "✗ ia-ops-argo-app not found at: $ARGO_REPO"
+  echo "  Clone it first:"
+  echo "    git clone git@github.com:aurelien-moreau/ia-ops-argo-app.git ../ia-ops-argo-app"
+  echo "  Or set: export ARGO_REPO=/path/to/ia-ops-argo-app"
+  exit 1
+fi
+
+CONFIG_FILE="$ARGO_REPO/apps/demo-app/k8s/configmap.yaml"
+
+echo "⚡ Injecting broken DATABASE_URL into $ARGO_REPO..."
 
 cat > "$CONFIG_FILE" << 'EOF'
 apiVersion: v1
@@ -23,13 +32,12 @@ data:
   LOG_LEVEL: "info"
 EOF
 
-git -C "$REPO_ROOT" add apps/demo-app/k8s/configmap.yaml
-git -C "$REPO_ROOT" commit -m "fix: update database endpoint configuration"
-git -C "$REPO_ROOT" push
+git -C "$ARGO_REPO" add apps/demo-app/k8s/configmap.yaml
+git -C "$ARGO_REPO" commit -m "fix: update database endpoint configuration"
+git -C "$ARGO_REPO" push
 
-echo "✓ Broken config pushed to GitHub"
+echo "✓ Broken config pushed to github.com/aurelien-moreau/ia-ops-argo-app"
 
-# Force ArgoCD to sync immediately (don't wait for 30s polling)
 echo ""
 echo "Triggering ArgoCD sync..."
 if command -v argocd &>/dev/null; then

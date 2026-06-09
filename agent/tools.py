@@ -6,7 +6,10 @@ import subprocess
 import time
 from pathlib import Path
 
-REPO_PATH = os.environ.get("REPO_PATH", str(Path(__file__).parent.parent))
+# ARGO_REPO points to the local clone of ia-ops-argo-app (the GitOps repo ArgoCD watches).
+# Default: ../ia-ops-argo-app relative to this file's parent directory.
+_default_argo = Path(__file__).parent.parent.parent / "ia-ops-argo-app"
+REPO_PATH = os.environ.get("ARGO_REPO", str(_default_argo))
 
 TOOLS = [
     {

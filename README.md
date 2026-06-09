@@ -154,14 +154,14 @@ Le script fait tout dans l'ordre :
 | # | Action | Durée |
 |---|--------|-------|
 | 1 | Crée le cluster kind `demo-ia-ops` | ~30s |
-| 2 | Build de l'image + `kind load docker-image` | ~60s |
-| 3 | Installe ArgoCD (intervalle sync : 30s) | ~90s |
-| 4 | Installe Stakater Reloader | ~15s |
-| 5 | Installe Kubernetes Dashboard | ~30s |
-| 6 | Applique le `root-app` ArgoCD | ~5s |
+| 2 | Installe ArgoCD (intervalle sync : 30s) | ~90s |
+| 3 | Installe Stakater Reloader | ~15s |
+| 4 | Installe Kubernetes Dashboard | ~30s |
+| 5 | Applique le `root-app` ArgoCD | ~5s |
+| 6 | ArgoCD sync → pull `aurelops/ia-ops-demo-app` depuis Docker Hub | ~60s |
 | 7 | Attend que postgres et demo-app soient ready | ~60s |
 
-**Durée totale : ~5 minutes.**
+**Durée totale : ~5 minutes.** Aucun build local nécessaire — l'image est tirée directement depuis Docker Hub.
 
 ---
 
@@ -319,11 +319,11 @@ Secrets GitHub requis dans `ia-ops-demo-app` :
 | `DOCKERHUB_USERNAME` | `aurelops` |
 | `DOCKERHUB_TOKEN` | Token Docker Hub (Read/Write) |
 
-Pour rebuilder l'image localement sans CI :
+Pour rebuilder l'image localement (dev uniquement, pas nécessaire pour le lab) :
 
 ```bash
 ./lab/build.sh
-# docker build + kind load docker-image (pas besoin de Docker Hub)
+# docker build + kind load docker-image
 ```
 
 ---

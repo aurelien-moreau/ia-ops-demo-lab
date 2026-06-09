@@ -5,6 +5,9 @@
 #   brew install kind kubectl helm
 #   Docker Desktop running
 #
+# The demo-app image (aurelops/ia-ops-demo-app:latest) is pulled from Docker Hub
+# automatically when ArgoCD deploys the app — no local build needed.
+#
 set -euo pipefail
 
 LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -35,10 +38,6 @@ else
   ok "Cluster created"
 fi
 kubectl cluster-info --context kind-demo-ia-ops
-
-# ─── Build & push demo-app image ──────────────────────────────────────────────
-section "Building demo-app image"
-bash "$LAB_DIR/build.sh"
 
 # ─── ArgoCD ───────────────────────────────────────────────────────────────────
 section "Installing ArgoCD"
@@ -128,9 +127,17 @@ DASHBOARD_TOKEN=$(kubectl get secret demo-admin-token \
 # ─── Bootstrap ArgoCD Apps via root Application ───────────────────────────────
 section "Bootstrapping via ArgoCD root Application"
 
-info "Applying root-app (App of Apps)..."
-kubectl apply -f "$REPO_ROOT/argocd/root-app.yaml"
-ok "root-app applied"
+# The root-app.yaml lives in ia-ops-argo-app (the GitOps repo), not here.
+# Point to the local clone of ia-ops-argo-app.
+ARGO_REPO="${ARGO_REPO:-$(cd "$REPO_ROOT/../ia-ops-argo-app" 2>/dev/null && pwd)}"
+
+if [ ! -f "$ARGO_REPO/argocd/root-app.yaml" ]; then
+  die "ia-ops-argo-app not found at: $ARGO_REPO\n  Clone it: git clone git@github.com:aurelien-moreau/ia-ops-argo-app.git ../ia-ops-argo-app"
+fi
+
+info "Applying root-app from $ARGO_REPO..."
+kubectl apply -f "$ARGO_REPO/argocd/root-app.yaml"
+ok "root-app applied — ArgoCD will now sync postgres + demo-app from GitHub"
 
 info "Waiting for ArgoCD to create child Applications (~30s)..."
 for app in postgres demo-app; do
@@ -138,17 +145,17 @@ for app in postgres demo-app; do
     kubectl get application "$app" -n argocd &>/dev/null && break
     sleep 5
   done
-  ok "Application '$app' created by ArgoCD"
+  ok "Application '$app' created"
 done
 
-info "Waiting for postgres Deployment to become available..."
+info "Waiting for postgres to be ready..."
 kubectl wait --for=condition=available deployment/postgres \
   -n default --timeout=120s
 ok "PostgreSQL ready"
 
-info "Waiting for demo-app Deployment to become available..."
+info "Waiting for demo-app to be ready (pulling aurelops/ia-ops-demo-app from Docker Hub)..."
 kubectl wait --for=condition=available deployment/demo-app \
-  -n default --timeout=120s
+  -n default --timeout=180s
 ok "demo-app ready"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
@@ -162,8 +169,8 @@ echo -e "  Dashboard token saved to: ${C}./lab/dashboard-token.txt${N}"
 echo "$DASHBOARD_TOKEN" > "$LAB_DIR/dashboard-token.txt"
 echo ""
 echo "Demo flow:"
-echo "  1. Open http://localhost:8081         → HEALTHY (green)"
+echo "  1. open http://localhost:8081         → HEALTHY (green)"
 echo "  2. ./scripts/break.sh                → ArgoCD syncs broken config"
-echo "  3. Refresh browser                   → DEGRADED (red) within 30s"
-echo "  4. cd agent && python main.py        → AI investigates + fixes via Git"
+echo "  3. Refresh browser                   → DEGRADED (red) within ~30s"
+echo "  4. cd agent && source .env && python main.py"
 echo "  5. Refresh browser                   → HEALTHY (green)"

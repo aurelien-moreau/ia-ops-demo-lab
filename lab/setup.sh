@@ -83,7 +83,7 @@ section "Installing Kubernetes Dashboard"
 if ! kubectl get deployment -n kubernetes-dashboard -l "app.kubernetes.io/name=kubernetes-dashboard" \
      --no-headers 2>/dev/null | grep -q .; then
   helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/ 2>/dev/null || true
-  helm repo update -q
+  helm repo update
   helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard \
     --create-namespace --namespace kubernetes-dashboard \
     --set app.ingress.enabled=false \

@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: demo-app
-          image: aurelops/demo-app:latest
+          image: aurelops/ia-ops-demo-app:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

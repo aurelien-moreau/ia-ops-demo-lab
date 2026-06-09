@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="aurelops/demo-app:latest"
+IMAGE="aurelops/ia-ops-demo-app:latest"
 
 echo "📦 Building demo-app..."
 

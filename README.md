@@ -141,7 +141,7 @@ Le script fait tout dans l'ordre :
 |---|--------|-------|
 | 1 | Crée la registry Docker locale (`localhost:5001`) | ~5s |
 | 2 | Crée le cluster kind `demo-ia-ops` | ~30s |
-| 3 | Build + push de l'image `demo-app` | ~60s |
+| 3 | Build + push de l'image `aurelops/ia-ops-demo-app` | ~60s |
 | 4 | Installe ArgoCD (intervalle sync : 30s) | ~90s |
 | 5 | Installe Stakater Reloader | ~15s |
 | 6 | Installe Kubernetes Dashboard | ~30s |

@@ -185,81 +185,155 @@ Pour le Dashboard (si installé via `./lab/install-dashboard.sh`), lancer dans u
 
 ---
 
-## Déroulé de la démo (sur scène)
+## Déroulé de la démo (sur scène — pas à pas)
 
-### Acte 1 — État sain (1 min)
+> Tout se fait à la main pour expliquer chaque étape au fur et à mesure.
+> Prépare **3 fenêtres** : terminal, browser sur http://localhost:8081, ArgoCD sur https://localhost:8080.
 
-Ouvrir http://localhost:8081 — montrer la page **HEALTHY** (verte).
+---
 
-Montrer ArgoCD sur https://localhost:8080 — toutes les apps en vert.
+### Acte 1 — Montrer l'état sain
 
+**Terminal :**
 ```bash
 kubectl get pods -n default
-# demo-app-xxx   2/2   Running   0   ...
-# postgres-xxx   1/1   Running   0   ...
+```
+```
+NAME                     READY   STATUS    RESTARTS
+demo-app-xxx             1/1     Running   0
+demo-app-yyy             1/1     Running   0
+postgres-zzz             1/1     Running   0
+```
+
+**Browser** → http://localhost:8081 → page **HEALTHY** (verte)
+
+**ArgoCD** → https://localhost:8080 → toutes les apps en vert
+
+> *"Voilà notre stack en production : deux replicas de l'app, une base PostgreSQL, tout géré par ArgoCD depuis GitHub."*
+
+---
+
+### Acte 2 — Introduire le bug manuellement
+
+Ouvrir `~/code/ia-ops-argo-app/apps/demo-app/k8s/configmap.yaml` et modifier la `DATABASE_URL` :
+
+```yaml
+# Avant (sain)
+DATABASE_URL: "postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb?sslmode=disable"
+
+# Après (cassé)
+DATABASE_URL: "postgres://"
+```
+
+Commiter et pousser :
+
+```bash
+cd ~/code/ia-ops-argo-app
+git add apps/demo-app/k8s/configmap.yaml
+git commit -m "fix: update database endpoint"
+git push
+```
+
+> *"Un développeur vient de pousser une mauvaise configuration en production. Ça arrive."*
+
+**Ce que voit l'audience dans les secondes qui suivent :**
+
+| Délai | Événement |
+|-------|-----------|
+| ~10s | ArgoCD passe **OutOfSync** → **Synced** |
+| ~15s | Reloader détecte le changement → rolling restart |
+| ~20s | Browser → page **DÉGRADÉE** (rouge, pulsante) |
+| ~20s | ArgoCD UI → app en état **Degraded** |
+
+```bash
+# Montrer les logs du pod
+kubectl logs -l app=demo-app -n default --tail=5
+# FATAL: DATABASE_URL is invalid: 'postgres://'
 ```
 
 ---
 
-### Acte 2 — Injection du bug (30 sec)
+### Acte 3 — Lancer l'agent IA
 
 ```bash
-./scripts/break.sh
-```
-
-Ce que fait le script :
-- Écrit `DATABASE_URL: "postgres://"` dans `ia-ops-argo-app/apps/demo-app/k8s/configmap.yaml`
-- `git commit` + `git push` sur `ia-ops-argo-app`
-- Force un refresh ArgoCD
-
-**Ce que voit l'audience :**
-- `~10s` : ArgoCD passe en **OutOfSync** puis **Synced**
-- `~15s` : Reloader déclenche le rolling restart
-- `~20s` : Browser → page **DÉGRADÉE** (rouge, pulsante)
-- `~40s` : `kubectl get pods` → `CrashLoopBackOff`
-- ArgoCD UI → app en état **Degraded**
-
----
-
-### Acte 3 — L'agent IA intervient (2-3 min)
-
-```bash
-cd agent && source .env && python main.py
+cd ~/code/ia-ops-demo-lab/agent
+source .env
+python3 main.py
 ```
 
 L'agent streame son raisonnement en live dans le terminal :
 
 ```
-→  get_cluster_status    → pods en CrashLoopBackOff détectés
-→  get_pod_logs          → FATAL: DATABASE_URL is invalid: 'postgres://'
-→  describe_pod          → events confirmés
-→  read_manifest         → configmap.yaml lu depuis ia-ops-argo-app
-→  apply_fix             → commit + push du fix sur GitHub
-→  check_argocd_sync     → ArgoCD Synced
-→  wait_for_healthy      → pods Running ✓
+🤖 AI Ops Agent
+
+⚠  INCIDENT TRIGGERED
+
+🧠 Agent: Je vais commencer par inspecter l'état du cluster...
+
+🔧 get_cluster_status(namespace=default)
+   → demo-app pods: Running mais Unready
+
+🔧 get_pod_logs(pod_name=demo-app-xxx, previous=true)
+   → FATAL: DATABASE_URL is invalid: 'postgres://'
+
+🔧 read_manifest(path=apps/demo-app/k8s/configmap.yaml)
+   → DATABASE_URL: "postgres://"  ← trouvé
+
+🧠 Agent: Root cause identifiée — DATABASE_URL malformée.
+          Correction en cours...
+
+🔧 apply_fix(path=apps/demo-app/k8s/configmap.yaml, ...)
+   → ✓ commit + push sur ia-ops-argo-app
+
+🔧 check_argocd_sync(app_name=demo-app)
+   → Synced ✓
+
+🔧 wait_for_healthy(label_selector=app=demo-app)
+   → ✓ All pods Running
 
 ✓ Incident résolu en ~90s
 ```
 
----
-
-### Acte 4 — Guérison (30 sec)
-
-- ArgoCD UI → retour en **Healthy**
-- Browser → page **HEALTHY** (verte)
-- `kubectl get pods` → tous en `Running`
-
-**Message clé** : *Le fix est dans Git. La piste d'audit est complète. Aucun humain n'a été réveillé.*
+> *"L'agent a lu les logs, trouvé la cause, corrigé le fichier dans Git et attendu la confirmation. Aucun humain n'a été réveillé."*
 
 ---
 
-## Réinitialiser la démo (entre deux runs)
+### Acte 4 — Montrer la guérison
+
+**ArgoCD** → retour en **Healthy** (vert)
+
+**Browser** → page **HEALTHY** (verte)
 
 ```bash
-./scripts/reset.sh
+kubectl get pods -n default
+# demo-app-xxx   1/1   Running   0
 ```
 
-Restaure la bonne `DATABASE_URL` dans `ia-ops-argo-app`, force le sync ArgoCD.
+```bash
+# Montrer le commit du fix dans Git
+git -C ~/code/ia-ops-argo-app log --oneline -3
+```
+
+> *"Le fix est dans Git. La piste d'audit est complète. Le cluster s'est auto-guéri."*
+
+---
+
+## Réinitialiser entre deux runs
+
+Si tu veux relancer la démo depuis un état sain :
+
+```bash
+cd ~/code/ia-ops-argo-app
+# Remettre la bonne DATABASE_URL dans configmap.yaml
+git add apps/demo-app/k8s/configmap.yaml
+git commit -m "fix: restore database configuration"
+git push
+```
+
+Ou utiliser le script :
+```bash
+~/code/ia-ops-demo-lab/scripts/reset.sh
+```
 
 ---
 

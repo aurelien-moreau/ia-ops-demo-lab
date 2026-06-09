@@ -27,7 +27,7 @@ metadata:
   name: demo-app-config
   namespace: default
 data:
-  DATABASE_URL: "postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb"
+  DATABASE_URL: "postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb?sslmode=disable"
   APP_ENV: "production"
   LOG_LEVEL: "info"
 EOF

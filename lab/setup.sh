@@ -41,34 +41,42 @@ kubectl cluster-info --context kind-demo-ia-ops
 
 # ─── ArgoCD ───────────────────────────────────────────────────────────────────
 section "Installing ArgoCD"
-kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
-if ! kubectl get deployment argocd-server -n argocd &>/dev/null; then
-  info "Applying ArgoCD manifests (server-side to avoid CRD size limit)..."
+_install_argocd() {
+  kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+  info "Applying ArgoCD manifests (server-side to avoid CRD annotation size limit)..."
   kubectl apply -n argocd --server-side \
     -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-fi
+  info "Waiting for ArgoCD server (~90s)..."
+  kubectl wait --for=condition=available deployment/argocd-server \
+    -n argocd --timeout=180s
+  ok "ArgoCD ready"
+  kubectl patch svc argocd-server -n argocd -p \
+    '{"spec":{"type":"NodePort","ports":[{"port":443,"targetPort":8080,"nodePort":30080,"name":"https"}]}}'
+  kubectl patch configmap argocd-cm -n argocd --type=merge \
+    -p '{"data":{"timeout.reconciliation":"30s"}}'
+  ok "Sync interval set to 30s"
+}
 
-info "Waiting for ArgoCD server (~90s on first install)..."
-kubectl wait --for=condition=available deployment/argocd-server \
-  -n argocd --timeout=180s
-ok "ArgoCD ready"
-
-# Expose via NodePort on host:8080
-kubectl patch svc argocd-server -n argocd -p \
-  '{"spec":{"type":"NodePort","ports":[{"port":443,"targetPort":8080,"nodePort":30080,"name":"https"}]}}'
-
-# Speed up sync polling to 30s (default is 3 minutes)
-kubectl patch configmap argocd-cm -n argocd --type=merge \
-  -p '{"data":{"timeout.reconciliation":"30s"}}'
-ok "Sync interval set to 30s"
-
-if kubectl get secret argocd-initial-admin-secret -n argocd &>/dev/null; then
-  ARGO_PASS=$(kubectl get secret argocd-initial-admin-secret \
-    -n argocd -o jsonpath="{.data.password}" | base64 -d)
+# If deployment exists but initial-admin-secret is missing → incomplete install → reinstall
+if kubectl get deployment argocd-server -n argocd &>/dev/null && \
+   ! kubectl get secret argocd-initial-admin-secret -n argocd &>/dev/null; then
+  warn "ArgoCD install incomplete (initial-admin-secret missing) — reinstalling..."
+  kubectl delete namespace argocd --wait=true
+  _install_argocd
+elif ! kubectl get deployment argocd-server -n argocd &>/dev/null; then
+  _install_argocd
 else
-  ARGO_PASS=""
+  ok "ArgoCD already installed"
+  kubectl patch svc argocd-server -n argocd -p \
+    '{"spec":{"type":"NodePort","ports":[{"port":443,"targetPort":8080,"nodePort":30080,"name":"https"}]}}' \
+    2>/dev/null || true
+  kubectl patch configmap argocd-cm -n argocd --type=merge \
+    -p '{"data":{"timeout.reconciliation":"30s"}}' 2>/dev/null || true
 fi
+
+ARGO_PASS=$(kubectl get secret argocd-initial-admin-secret \
+  -n argocd -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null || echo "")
 
 # ─── Stakater Reloader ────────────────────────────────────────────────────────
 # Reloader watches ConfigMaps and automatically rolls Deployments when they change.

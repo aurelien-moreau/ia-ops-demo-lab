@@ -1,0 +1,17 @@
+# Secrets — never commit these
+agent/.env
+.lab-env
+lab/dashboard-token.txt
+
+# Go build artifacts
+apps/demo-app/demo-app
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store

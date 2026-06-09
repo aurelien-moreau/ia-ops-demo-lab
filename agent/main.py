@@ -42,7 +42,7 @@ The GitOps repository contains the Kubernetes manifests watched by ArgoCD:
 ```
 apps/
   demo-app/k8s/
-    configmap.yaml    ← DATABASE_URL lives here — THIS is the file to fix
+    configmap.yaml
     deployment.yaml
     service.yaml
   postgres/k8s/
@@ -55,7 +55,6 @@ argocd/
     postgres.yaml
 ```
 
-The file to read and fix is always: `apps/demo-app/k8s/configmap.yaml`
 
 ## Workflow
 1. `get_cluster_status` — identify which pods/deployments are unhealthy

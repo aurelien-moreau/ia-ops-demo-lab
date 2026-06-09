@@ -44,8 +44,8 @@ section "Installing ArgoCD"
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
 if ! kubectl get deployment argocd-server -n argocd &>/dev/null; then
-  info "Applying ArgoCD manifests..."
-  kubectl apply -n argocd \
+  info "Applying ArgoCD manifests (server-side to avoid CRD size limit)..."
+  kubectl apply -n argocd --server-side \
     -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 fi
 

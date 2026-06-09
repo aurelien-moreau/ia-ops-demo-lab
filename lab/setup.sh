@@ -82,8 +82,8 @@ ok "Reloader installed"
 section "Installing Kubernetes Dashboard"
 if ! kubectl get deployment -n kubernetes-dashboard -l "app.kubernetes.io/name=kubernetes-dashboard" \
      --no-headers 2>/dev/null | grep -q .; then
-  helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/ 2>/dev/null || true
-  helm repo update
+  helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/ --force-update
+  helm repo update kubernetes-dashboard
   helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard \
     --create-namespace --namespace kubernetes-dashboard \
     --set app.ingress.enabled=false \

@@ -78,51 +78,9 @@ if ! kubectl get deployment reloader-reloader -n default &>/dev/null; then
 fi
 ok "Reloader installed"
 
-# ─── Kubernetes Dashboard ─────────────────────────────────────────────────────
-section "Installing Kubernetes Dashboard"
-if ! kubectl get deployment -n kubernetes-dashboard -l "app.kubernetes.io/name=kubernetes-dashboard" \
-     --no-headers 2>/dev/null | grep -q .; then
-  helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/ --force-update
-  helm repo update kubernetes-dashboard
-  helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard \
-    --create-namespace --namespace kubernetes-dashboard \
-    --set app.ingress.enabled=false \
-    --wait --timeout=120s
-fi
-ok "Dashboard installed"
-
-kubectl apply -f - <<'EOF'
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: demo-admin
-  namespace: kubernetes-dashboard
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: demo-admin
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
-subjects:
-  - kind: ServiceAccount
-    name: demo-admin
-    namespace: kubernetes-dashboard
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: demo-admin-token
-  namespace: kubernetes-dashboard
-  annotations:
-    kubernetes.io/service-account.name: demo-admin
-type: kubernetes.io/service-account-token
-EOF
-sleep 3
-DASHBOARD_TOKEN=$(kubectl get secret demo-admin-token \
-  -n kubernetes-dashboard -o jsonpath='{.data.token}' | base64 -d)
+# ─── Kubernetes Dashboard (optionnel) ────────────────────────────────────────
+# Non installé automatiquement — voir lab/install-dashboard.sh si besoin.
+# Pour la démo, l'UI ArgoCD (https://localhost:8080) est suffisante.
 
 # ─── Bootstrap ArgoCD Apps via root Application ───────────────────────────────
 section "Bootstrapping via ArgoCD root Application"
@@ -163,10 +121,7 @@ section "Lab ready"
 echo -e "  ${G}demo-app      ${N}→ ${C}http://localhost:8081${N}"
 echo -e "  ${G}ArgoCD UI     ${N}→ ${C}https://localhost:8080${N}"
 echo -e "               username: ${C}admin${N}  password: ${C}${ARGO_PASS}${N}"
-echo -e "  ${G}K8s Dashboard ${N}→ ${C}./lab/port-forward.sh${N} then http://localhost:8888"
-echo ""
-echo -e "  Dashboard token saved to: ${C}./lab/dashboard-token.txt${N}"
-echo "$DASHBOARD_TOKEN" > "$LAB_DIR/dashboard-token.txt"
+echo -e "  ${Y}K8s Dashboard ${N}→ optionnel : ${C}./lab/install-dashboard.sh${N}"
 echo ""
 echo "Demo flow:"
 echo "  1. open http://localhost:8081         → HEALTHY (green)"

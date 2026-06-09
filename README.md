@@ -156,12 +156,16 @@ Le script fait tout dans l'ordre :
 | 1 | Crée le cluster kind `demo-ia-ops` | ~30s |
 | 2 | Installe ArgoCD (intervalle sync : 30s) | ~90s |
 | 3 | Installe Stakater Reloader | ~15s |
-| 4 | Installe Kubernetes Dashboard | ~30s |
-| 5 | Applique le `root-app` ArgoCD | ~5s |
-| 6 | ArgoCD sync → pull `aurelops/ia-ops-demo-app` depuis Docker Hub | ~60s |
-| 7 | Attend que postgres et demo-app soient ready | ~60s |
+| 4 | Applique le `root-app` ArgoCD | ~5s |
+| 5 | ArgoCD sync → pull `aurelops/ia-ops-demo-app` depuis Docker Hub | ~60s |
+| 6 | Attend que postgres et demo-app soient ready | ~60s |
 
-**Durée totale : ~5 minutes.** Aucun build local nécessaire — l'image est tirée directement depuis Docker Hub.
+**Durée totale : ~4 minutes.** Aucun build local nécessaire — l'image est tirée directement depuis Docker Hub.
+
+> **Kubernetes Dashboard** non inclus par défaut (chart Helm instable). Pour l'installer séparément :
+> ```bash
+> ./lab/install-dashboard.sh
+> ```
 
 ---
 
@@ -171,9 +175,9 @@ Le script fait tout dans l'ordre :
 |-----------|-----|-------------|
 | **demo-app** (status visuel) | http://localhost:8081 | — |
 | **ArgoCD UI** | https://localhost:8080 | `admin` / affiché par `setup.sh` |
-| **K8s Dashboard** | http://localhost:8888 | token dans `lab/dashboard-token.txt` |
+| **K8s Dashboard** *(optionnel)* | http://localhost:8888 | token dans `lab/dashboard-token.txt` |
 
-Pour le Dashboard, lancer dans un terminal séparé :
+Pour le Dashboard (si installé via `./lab/install-dashboard.sh`), lancer dans un terminal séparé :
 
 ```bash
 ./lab/port-forward.sh

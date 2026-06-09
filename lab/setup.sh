@@ -94,28 +94,27 @@ ok "Reloader installed"
 # Non installé automatiquement — voir lab/install-dashboard.sh si besoin.
 # Pour la démo, l'UI ArgoCD (https://localhost:8080) est suffisante.
 
-# ─── Bootstrap ArgoCD Apps via root Application ───────────────────────────────
+# ─── Bootstrap ArgoCD Apps ────────────────────────────────────────────────────
 section "Bootstrapping via ArgoCD root Application"
 
-# The root-app.yaml lives in ia-ops-argo-app (the GitOps repo), not here.
-# Point to the local clone of ia-ops-argo-app.
-ARGO_REPO="${ARGO_REPO:-$(cd "$REPO_ROOT/../ia-ops-argo-app" 2>/dev/null && pwd)}"
+GITOPS_RAW="https://raw.githubusercontent.com/aurelien-moreau/ia-ops-argo-app/main"
 
-if [ ! -f "$ARGO_REPO/argocd/root-app.yaml" ]; then
-  die "ia-ops-argo-app not found at: $ARGO_REPO\n  Clone it: git clone git@github.com:aurelien-moreau/ia-ops-argo-app.git ../ia-ops-argo-app"
-fi
+info "Applying root-app (App of Apps)..."
+kubectl apply -f "$GITOPS_RAW/argocd/root-app.yaml"
+ok "root-app appliqué — ArgoCD va créer les Applications demo-app et postgres"
 
-info "Applying root-app from $ARGO_REPO..."
-kubectl apply -f "$ARGO_REPO/argocd/root-app.yaml"
-ok "root-app applied — ArgoCD will now sync postgres + demo-app from GitHub"
-
-info "Waiting for ArgoCD to create child Applications (~30s)..."
+info "Waiting for child Applications to appear (ArgoCD sync, max 90s)..."
 for app in postgres demo-app; do
-  for i in $(seq 1 12); do
-    kubectl get application "$app" -n argocd &>/dev/null && break
+  found=0
+  for i in $(seq 1 18); do
+    if kubectl get application "$app" -n argocd &>/dev/null; then
+      found=1; break
+    fi
+    echo -e "  ${C}[${i}/18]${N} attente de l'Application '$app'..."
     sleep 5
   done
-  ok "Application '$app' created"
+  [ "$found" -eq 1 ] && ok "Application '$app' créée" \
+    || die "Application '$app' non créée après 90s — vérifier ArgoCD UI https://localhost:8080"
 done
 
 info "Waiting for postgres to be ready..."
@@ -130,19 +129,31 @@ ok "demo-app ready"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 section "Lab ready"
-echo -e "  ${G}demo-app      ${N}→ ${C}http://localhost:8081${N}"
-echo -e "  ${G}ArgoCD UI     ${N}→ ${C}https://localhost:8080${N}  (accepter le cert auto-signé)"
-if [ -n "$ARGO_PASS" ]; then
-  echo -e "               username: ${C}admin${N}  password: ${C}${ARGO_PASS}${N}"
-else
-  echo -e "               username: ${C}admin${N}  password: récupérer avec :"
-  echo -e "               ${C}kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}' | base64 -d${N}"
-fi
-echo -e "  ${Y}K8s Dashboard ${N}→ optionnel : ${C}./lab/install-dashboard.sh${N}"
+
+echo -e "  ${G}demo-app   ${N}→ ${C}http://localhost:8081${N}"
+echo -e "  ${G}ArgoCD UI  ${N}→ ${C}https://localhost:8080${N}  (accepter le cert auto-signé)"
 echo ""
-echo "Demo flow:"
-echo "  1. open http://localhost:8081         → HEALTHY (green)"
-echo "  2. ./scripts/break.sh                → ArgoCD syncs broken config"
-echo "  3. Refresh browser                   → DEGRADED (red) within ~30s"
+echo -e "  ┌─────────────────────────────────────┐"
+echo -e "  │  ArgoCD credentials                 │"
+echo -e "  │  username : ${C}admin${N}                   │"
+if [ -n "$ARGO_PASS" ]; then
+echo -e "  │  password : ${C}${ARGO_PASS}${N}"
+echo -e "  └─────────────────────────────────────┘"
+else
+echo -e "  │  password : ${R}non trouvé${N} — lancer :    │"
+echo -e "  │  ${C}kubectl get secret argocd-initial-admin-secret${N} │"
+echo -e "  │  ${C}  -n argocd -o jsonpath='{.data.password}'${N} │"
+echo -e "  │  ${C}  | base64 -d${N}                      │"
+echo -e "  └─────────────────────────────────────┘"
+fi
+echo ""
+echo -e "  ${Y}K8s Dashboard${N} → optionnel : ${C}./lab/install-dashboard.sh${N}"
+echo ""
+echo -e "${C}━━━ Demo flow ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+echo ""
+echo "  1. open http://localhost:8081              → HEALTHY (vert)"
+echo "  2. ./scripts/break.sh                     → ArgoCD sync config cassée"
+echo "  3. Rafraîchir le browser                  → DEGRADED (rouge) en ~30s"
 echo "  4. cd agent && source .env && python main.py"
-echo "  5. Refresh browser                   → HEALTHY (green)"
+echo "  5. Rafraîchir le browser                  → HEALTHY (vert)"
+echo ""

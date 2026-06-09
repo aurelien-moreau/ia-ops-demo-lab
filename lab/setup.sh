@@ -63,15 +63,12 @@ kubectl patch configmap argocd-cm -n argocd --type=merge \
   -p '{"data":{"timeout.reconciliation":"30s"}}'
 ok "Sync interval set to 30s"
 
-# Wait for the initial admin secret (created by ArgoCD init job, not the deployment)
-info "Waiting for ArgoCD admin secret..."
-for i in $(seq 1 20); do
-  kubectl get secret argocd-initial-admin-secret -n argocd &>/dev/null && break
-  sleep 3
-done
-
-ARGO_PASS=$(kubectl get secret argocd-initial-admin-secret \
-  -n argocd -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null) || ARGO_PASS=""
+if kubectl get secret argocd-initial-admin-secret -n argocd &>/dev/null; then
+  ARGO_PASS=$(kubectl get secret argocd-initial-admin-secret \
+    -n argocd -o jsonpath="{.data.password}" | base64 -d)
+else
+  ARGO_PASS=""
+fi
 
 # ─── Stakater Reloader ────────────────────────────────────────────────────────
 # Reloader watches ConfigMaps and automatically rolls Deployments when they change.

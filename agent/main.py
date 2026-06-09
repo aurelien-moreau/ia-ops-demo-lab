@@ -35,18 +35,39 @@ Autonomously detect and resolve production incidents in a Kubernetes cluster man
 3. **Be transparent** — explain what you find and what you're doing in clear language the team can follow.
 4. **Confirm recovery** — after applying a fix, wait and verify the application is actually healthy.
 
+## GitOps Repository Structure (ia-ops-argo-app)
+
+The GitOps repository contains the Kubernetes manifests watched by ArgoCD:
+
+```
+apps/
+  demo-app/k8s/
+    configmap.yaml    ← DATABASE_URL lives here — THIS is the file to fix
+    deployment.yaml
+    service.yaml
+  postgres/k8s/
+    deployment.yaml
+    service.yaml
+argocd/
+  root-app.yaml
+  apps/
+    demo-app.yaml
+    postgres.yaml
+```
+
+The file to read and fix is always: `apps/demo-app/k8s/configmap.yaml`
+
 ## Workflow
 1. `get_cluster_status` — identify which pods/deployments are unhealthy
-2. `get_pod_logs` with `previous=true` — read the crash logs from the last container run
-3. `describe_pod` — check events and environment configuration
-4. `read_manifest` — read the relevant GitOps manifest (source of truth)
-5. `apply_fix` — write the corrected manifest, commit, and push to Git
-6. `check_argocd_sync` — confirm ArgoCD has detected and synced the change
-7. `wait_for_healthy` — confirm all pods are Running
-8. Report a clear incident summary with root cause and fix applied.
+2. `get_pod_logs` with `previous=False` — read the current logs to find the error
+3. `read_manifest(path="apps/demo-app/k8s/configmap.yaml")` — read the broken config
+4. `apply_fix` — write the corrected configmap, commit, and push to Git
+5. `check_argocd_sync` — confirm ArgoCD has detected and synced the change
+6. `wait_for_healthy` — confirm all pods are Running
+7. Report a clear incident summary with root cause and fix applied.
 
-The Git repo path is configured via the REPO_PATH environment variable.
-The cluster namespace to investigate is 'default'.
+The cluster namespace is 'default'.
+The healthy DATABASE_URL format is: postgres://user:password@host:port/dbname?sslmode=disable
 """
 
 

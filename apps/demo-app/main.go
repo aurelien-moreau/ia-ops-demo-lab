@@ -9,13 +9,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	_ "github.com/lib/pq"
 )
+
+// Each pod holds exactly this many DB connections.
+// 2 pods × 10 = 20 (within postgres max_connections=30).
+// 5 pods × 10 = 50 (exceeds postgres max_connections=30 → rejection).
+const dbPoolSize = 10
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -24,34 +29,17 @@ type dbStatus struct {
 	connected   bool
 	errMsg      string
 	lastChecked time.Time
-	poolMax     int
-	poolInUse   int
-	poolWaiting int64
 }
 
 var (
-	pool          *sql.DB
-	state         dbStatus
-	requestCount  atomic.Int64
-	lastWaitCount atomic.Int64 // tracks WaitCount delta (WaitCount is cumulative in db.Stats())
-	startTime     = time.Now()
-	tmpl          = template.Must(template.New("page").Parse(htmlPage))
+	pool         *sql.DB
+	state        dbStatus
+	requestCount atomic.Int64
+	startTime    = time.Now()
+	tmpl         = template.Must(template.New("page").Parse(htmlPage))
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-func getIntEnv(key string, def int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		log.Printf("[WARN] %s=%q is not a valid integer, using default %d", key, v, def)
-		return def
-	}
-	return n
-}
 
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
@@ -68,7 +56,6 @@ func redactURL(raw string) string {
 
 func initPool() error {
 	dbURL := os.Getenv("DATABASE_URL")
-	maxConns := getIntEnv("DB_MAX_CONNECTIONS", 10)
 
 	u, err := url.Parse(dbURL)
 	if err != nil || u.Host == "" {
@@ -80,17 +67,15 @@ func initPool() error {
 		return fmt.Errorf("cannot open database: %w", err)
 	}
 
-	db.SetMaxOpenConns(maxConns)
-	db.SetMaxIdleConns(maxConns)
+	db.SetMaxOpenConns(dbPoolSize)
+	db.SetMaxIdleConns(dbPoolSize)
 	db.SetConnMaxLifetime(30 * time.Second)
 
 	pool = db
-	log.Printf("[INFO]  DB pool initialized: max_connections=%d url=%s", maxConns, redactURL(dbURL))
+	log.Printf("[INFO]  DB pool initialized: connections_per_pod=%d url=%s", dbPoolSize, redactURL(dbURL))
 	return nil
 }
 
-// checkDB runs a ping and updates the global state with pool stats.
-// WaitCount in db.Stats() is cumulative — we track deltas to detect real-time pressure.
 func checkDB() {
 	if pool == nil {
 		state.mu.Lock()
@@ -104,95 +89,50 @@ func checkDB() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	err := pool.PingContext(ctx)
-	stats := pool.Stats()
-
-	// WaitCount is cumulative: compute delta since last check
-	prev := lastWaitCount.Swap(stats.WaitCount)
-	waitDelta := stats.WaitCount - prev
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
-
-	state.poolMax = stats.MaxOpenConnections
-	state.poolInUse = stats.InUse
 	state.lastChecked = time.Now()
 
 	if err != nil {
 		state.connected = false
-		if waitDelta > 0 {
-			state.poolWaiting = waitDelta
+		errStr := err.Error()
+		switch {
+		case strings.Contains(errStr, "too many clients") || strings.Contains(errStr, "max_connections"):
 			state.errMsg = fmt.Sprintf(
-				"[ERROR] DB connection pool exhausted: max_connections=%d, %d requests had to wait\n[ERROR] Requests queuing — latency severely degraded",
-				stats.MaxOpenConnections, waitDelta,
+				"[ERROR] PostgreSQL rejected connection: %v\n[ERROR] Database max_connections limit reached — scale up postgres or reduce pod count",
+				err,
 			)
-			log.Printf("[ERROR] DB connection pool exhausted: max_connections=%d, requests_waited=%d",
-				stats.MaxOpenConnections, waitDelta)
-		} else {
-			state.poolWaiting = 0
-			state.errMsg = fmt.Sprintf("[ERROR] Cannot reach database: %v", err)
+			log.Printf("[ERROR] PostgreSQL connection rejected: too many clients (max_connections limit reached)")
+		case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "no such host"):
+			state.errMsg = fmt.Sprintf("[ERROR] Cannot reach database at %s: %v", os.Getenv("DATABASE_URL"), err)
 			log.Printf("[ERROR] Cannot reach database: %v", err)
+		default:
+			state.errMsg = fmt.Sprintf("[ERROR] Database error: %v", err)
+			log.Printf("[ERROR] Database error: %v", err)
 		}
 	} else {
 		state.connected = true
-		state.poolWaiting = waitDelta
 		state.errMsg = ""
-		// Only warn when waiting is significant relative to pool size
-		if stats.MaxOpenConnections > 0 && waitDelta > int64(stats.MaxOpenConnections)/2 {
-			log.Printf("[WARN]  DB pool pressure: max_connections=%d, requests_waited=%d",
-				stats.MaxOpenConnections, waitDelta)
-		}
-	}
-}
-
-// runLoadSimulator generates concurrent DB queries to reveal pool exhaustion.
-// With DB_MAX_CONNECTIONS=1, this will quickly saturate the pool.
-func runLoadSimulator() {
-	t := time.NewTicker(8 * time.Second)
-	for range t.C {
-		if pool == nil {
-			continue
-		}
-		maxConns := pool.Stats().MaxOpenConnections
-		if maxConns <= 0 {
-			maxConns = 10
-		}
-		// Always attempt more connections than the pool allows
-		pressure := maxConns + 3
-		var wg sync.WaitGroup
-		for i := 0; i < pressure; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-				defer cancel()
-				if pool != nil {
-					pool.PingContext(ctx) //nolint
-				}
-			}()
-		}
-		wg.Wait()
 	}
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
 type pageData struct {
-	Connected    bool
-	DatabaseURL  string
-	Error        string
-	Uptime       string
-	Requests     int64
-	LastChecked  string
-	PodName      string
-	Namespace    string
-	PoolMax      int
-	PoolInUse    int
-	PoolWaiting  int64
-	PoolExhausted bool
+	Connected   bool
+	DatabaseURL string
+	Error       string
+	Uptime      string
+	Requests    int64
+	LastChecked string
+	PodName     string
+	Namespace   string
+	PoolSize    int
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
@@ -204,18 +144,15 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	state.mu.RLock()
 	data := pageData{
-		Connected:     state.connected,
-		DatabaseURL:   redactURL(os.Getenv("DATABASE_URL")),
-		Error:         state.errMsg,
-		Uptime:        time.Since(startTime).Round(time.Second).String(),
-		Requests:      requestCount.Load(),
-		LastChecked:   state.lastChecked.Format("15:04:05"),
-		PodName:       os.Getenv("POD_NAME"),
-		Namespace:     os.Getenv("POD_NAMESPACE"),
-		PoolMax:       state.poolMax,
-		PoolInUse:     state.poolInUse,
-		PoolWaiting:   state.poolWaiting,
-		PoolExhausted: state.poolWaiting > 0,
+		Connected:   state.connected,
+		DatabaseURL: redactURL(os.Getenv("DATABASE_URL")),
+		Error:       state.errMsg,
+		Uptime:      time.Since(startTime).Round(time.Second).String(),
+		Requests:    requestCount.Load(),
+		LastChecked: state.lastChecked.Format("15:04:05"),
+		PodName:     os.Getenv("POD_NAME"),
+		Namespace:   os.Getenv("POD_NAMESPACE"),
+		PoolSize:    dbPoolSize,
 	}
 	state.mu.RUnlock()
 
@@ -256,8 +193,6 @@ func main() {
 		}
 	}()
 
-	go runLoadSimulator()
-
 	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/health", healthHandler)
 
@@ -265,7 +200,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	log.Printf("[INFO]  demo-app listening on :%s", port)
+	log.Printf("[INFO]  demo-app listening on :%s (pool=%d connections/pod)", port, dbPoolSize)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -288,29 +223,23 @@ const htmlPage = `<!DOCTYPE html>
       --muted:     #4a6080;
       --green:     #22c55e;
       --green-dim: rgba(34,197,94,.12);
-      --orange:    #f59e0b;
-      --orange-dim:rgba(245,158,11,.12);
       --red:       #ef4444;
       --red-dim:   rgba(239,68,68,.12);
       --mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     }
     body {
       font-family: var(--mono);
-      background: var(--bg);
-      color: var(--text);
+      background: var(--bg); color: var(--text);
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
-      gap: 1.5rem;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 2rem; gap: 1.5rem;
     }
     .topbar {
       width: 100%; max-width: 760px;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .app-name { font-size: 1rem; color: var(--muted); letter-spacing: .15em; }
+    .app-name   { font-size: 1rem; color: var(--muted); letter-spacing: .15em; }
     .refresh-badge {
       font-size: .65rem; color: var(--muted);
       background: var(--surface); border: 1px solid var(--border);
@@ -321,8 +250,8 @@ const htmlPage = `<!DOCTYPE html>
       border-radius: 1.25rem; border: 2px solid;
       padding: 3rem 2rem; text-align: center;
     }
-    .banner.healthy  { background: var(--green-dim);  border-color: var(--green); }
-    .banner.degraded { background: var(--red-dim);    border-color: var(--red);
+    .banner.healthy  { background: var(--green-dim); border-color: var(--green); }
+    .banner.degraded { background: var(--red-dim);   border-color: var(--red);
                        animation: glow-red 2s ease-in-out infinite; }
     @keyframes glow-red {
       0%,100% { box-shadow: 0 0  0    0   rgba(239,68,68,.2); }
@@ -344,25 +273,14 @@ const htmlPage = `<!DOCTYPE html>
       width: 100%; max-width: 760px;
       display: grid; grid-template-columns: 1fr 1fr; gap: .75rem;
     }
-    .card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: .75rem; padding: 1rem 1.25rem;
-    }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem 1.25rem; }
     .card.wide { grid-column: 1 / -1; }
-    .card.pool-warn { border-color: var(--orange); background: var(--orange-dim); }
-    .card.pool-ok   { border-color: var(--green);  background: var(--green-dim); }
     .card-label { font-size: .6rem; color: var(--muted); letter-spacing: .2em; text-transform: uppercase; margin-bottom: .4rem; }
     .card-value { font-size: .85rem; color: var(--text); word-break: break-all; }
-    .pool-bar-bg { background: var(--border); border-radius: 99px; height: 8px; margin-top: .5rem; overflow: hidden; }
-    .pool-bar-fill { height: 100%; border-radius: 99px; transition: width .3s; }
-    .pool-bar-fill.ok   { background: var(--green); }
-    .pool-bar-fill.warn { background: var(--orange); }
-    .pool-bar-fill.crit { background: var(--red); animation: blink 1s ease-in-out infinite; }
-    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-    .dot.green  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
-    .dot.red    { background: var(--red);    box-shadow: 0 0 6px var(--red); animation: blink 1s ease-in-out infinite; }
-    .dot.orange { background: var(--orange); box-shadow: 0 0 6px var(--orange); animation: blink 1s ease-in-out infinite; }
+    .dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.red   { background: var(--red);   box-shadow: 0 0 6px var(--red); animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
     .footer { font-size: .65rem; color: var(--muted); letter-spacing: .1em; }
   </style>
 </head>
@@ -401,28 +319,14 @@ const htmlPage = `<!DOCTYPE html>
         {{.DatabaseURL}}
       </div>
     </div>
-
-    {{$pct := 0}}
-    {{if gt .PoolMax 0}}
-    <div class="card wide {{if .PoolExhausted}}pool-warn{{else}}pool-ok{{end}}">
-      <div class="card-label">Connection Pool</div>
-      <div class="card-value">
-        {{if .PoolExhausted}}
-        <span class="dot orange"></span>EXHAUSTED — {{.PoolInUse}}/{{.PoolMax}} connections · {{.PoolWaiting}} requests waiting
-        {{else}}
-        <span class="dot green"></span>{{.PoolInUse}}/{{.PoolMax}} connections in use
-        {{end}}
-      </div>
-      <div class="pool-bar-bg">
-        {{if .PoolExhausted}}
-        <div class="pool-bar-fill crit" style="width:100%"></div>
-        {{else if gt .PoolMax 0}}
-        <div class="pool-bar-fill ok" style="width:{{if gt .PoolMax 0}}{{.PoolInUse}}{{else}}0{{end}}%"></div>
-        {{end}}
-      </div>
+    <div class="card">
+      <div class="card-label">DB Connections / Pod</div>
+      <div class="card-value">{{.PoolSize}} connections</div>
     </div>
-    {{end}}
-
+    <div class="card">
+      <div class="card-label">Uptime</div>
+      <div class="card-value">{{.Uptime}}</div>
+    </div>
     <div class="card">
       <div class="card-label">Pod</div>
       <div class="card-value">{{if .PodName}}{{.PodName}}{{else}}local{{end}}</div>
@@ -432,14 +336,10 @@ const htmlPage = `<!DOCTYPE html>
       <div class="card-value">{{if .Namespace}}{{.Namespace}}{{else}}default{{end}}</div>
     </div>
     <div class="card">
-      <div class="card-label">Uptime</div>
-      <div class="card-value">{{.Uptime}}</div>
-    </div>
-    <div class="card">
       <div class="card-label">Requests Served</div>
       <div class="card-value">{{.Requests}}</div>
     </div>
-    <div class="card wide">
+    <div class="card">
       <div class="card-label">Last DB Check</div>
       <div class="card-value">{{.LastChecked}}</div>
     </div>

@@ -28,6 +28,7 @@ metadata:
   namespace: default
 data:
   DATABASE_URL: "postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb?sslmode=disable"
+  DB_MAX_CONNECTIONS: "10"
   APP_ENV: "production"
   LOG_LEVEL: "info"
 EOF

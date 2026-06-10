@@ -30,11 +30,12 @@ type dbStatus struct {
 }
 
 var (
-	pool         *sql.DB
-	state        dbStatus
-	requestCount atomic.Int64
-	startTime    = time.Now()
-	tmpl         = template.Must(template.New("page").Parse(htmlPage))
+	pool          *sql.DB
+	state         dbStatus
+	requestCount  atomic.Int64
+	lastWaitCount atomic.Int64 // tracks WaitCount delta (WaitCount is cumulative in db.Stats())
+	startTime     = time.Now()
+	tmpl          = template.Must(template.New("page").Parse(htmlPage))
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -89,11 +90,15 @@ func initPool() error {
 }
 
 // checkDB runs a ping and updates the global state with pool stats.
+// WaitCount in db.Stats() is cumulative — we track deltas to detect real-time pressure.
 func checkDB() {
 	if pool == nil {
 		state.mu.Lock()
 		state.connected = false
-		state.errMsg = fmt.Sprintf("[ERROR] DATABASE_URL is invalid: %q\n[ERROR] Expected: postgres://user:password@host:port/dbname?sslmode=disable", os.Getenv("DATABASE_URL"))
+		state.errMsg = fmt.Sprintf(
+			"[ERROR] DATABASE_URL is invalid: %q\n[ERROR] Expected: postgres://user:password@host:port/dbname?sslmode=disable",
+			os.Getenv("DATABASE_URL"),
+		)
 		state.lastChecked = time.Now()
 		state.mu.Unlock()
 		return
@@ -105,33 +110,41 @@ func checkDB() {
 	err := pool.PingContext(ctx)
 	stats := pool.Stats()
 
+	// WaitCount is cumulative: compute delta since last check
+	prev := lastWaitCount.Swap(stats.WaitCount)
+	waitDelta := stats.WaitCount - prev
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	state.poolMax = stats.MaxOpenConnections
 	state.poolInUse = stats.InUse
-	state.poolWaiting = stats.WaitCount
 	state.lastChecked = time.Now()
 
 	if err != nil {
 		state.connected = false
-		if stats.WaitCount > 0 {
+		if waitDelta > 0 {
+			state.poolWaiting = waitDelta
 			state.errMsg = fmt.Sprintf(
-				"[ERROR] DB connection pool exhausted: max_connections=%d, wait_count=%d\n[ERROR] Requests queuing — latency severely degraded",
-				stats.MaxOpenConnections, stats.WaitCount,
+				"[ERROR] DB connection pool exhausted: max_connections=%d, %d requests had to wait\n[ERROR] Requests queuing — latency severely degraded",
+				stats.MaxOpenConnections, waitDelta,
 			)
-			log.Printf("[ERROR] DB connection pool exhausted: max_connections=%d, wait_count=%d",
-				stats.MaxOpenConnections, stats.WaitCount)
+			log.Printf("[ERROR] DB connection pool exhausted: max_connections=%d, requests_waited=%d",
+				stats.MaxOpenConnections, waitDelta)
 		} else {
-			state.errMsg = fmt.Sprintf("[ERROR] Cannot reach database at %s: %v", pool.Stats(), err)
+			state.poolWaiting = 0
+			state.errMsg = fmt.Sprintf("[ERROR] Cannot reach database: %v", err)
+			log.Printf("[ERROR] Cannot reach database: %v", err)
 		}
 	} else {
-		if stats.WaitCount > 0 {
-			log.Printf("[WARN]  DB pool pressure detected: max_connections=%d in_use=%d wait_count=%d",
-				stats.MaxOpenConnections, stats.InUse, stats.WaitCount)
-		}
 		state.connected = true
+		state.poolWaiting = waitDelta
 		state.errMsg = ""
+		// Only warn when waiting is significant relative to pool size
+		if stats.MaxOpenConnections > 0 && waitDelta > int64(stats.MaxOpenConnections)/2 {
+			log.Printf("[WARN]  DB pool pressure: max_connections=%d, requests_waited=%d",
+				stats.MaxOpenConnections, waitDelta)
+		}
 	}
 }
 

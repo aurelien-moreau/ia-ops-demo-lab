@@ -190,42 +190,42 @@ Pour le Dashboard (si installé via `./lab/install-dashboard.sh`), lancer dans u
 > Tout se fait à la main pour expliquer chaque étape au fur et à mesure.
 > Prépare **3 fenêtres** : terminal, browser sur http://localhost:8081, ArgoCD sur https://localhost:8080.
 
+Deux scénarios indépendants au choix, ou enchaînés l'un après l'autre.
+
 ---
 
-### Acte 1 — Montrer l'état sain
+## Scénario A — DATABASE_URL malformée
 
-**Terminal :**
+> *L'URL de connexion est corrompue après un mauvais déploiement. L'app perd accès à la base.*
+
+### A1 — Montrer l'état sain
+
 ```bash
 kubectl get pods -n default
 ```
 ```
-NAME                     READY   STATUS    RESTARTS
-demo-app-xxx             1/1     Running   0
-demo-app-yyy             1/1     Running   0
-postgres-zzz             1/1     Running   0
+demo-app-xxx   1/1   Running   0
+demo-app-yyy   1/1   Running   0
+postgres-zzz   1/1   Running   0
 ```
 
-**Browser** → http://localhost:8081 → page **HEALTHY** (verte)
-
+**Browser** → http://localhost:8081 → **HEALTHY** (vert)
 **ArgoCD** → https://localhost:8080 → toutes les apps en vert
 
-> *"Voilà notre stack en production : deux replicas de l'app, une base PostgreSQL, tout géré par ArgoCD depuis GitHub."*
+> *"Voilà notre stack : deux replicas, une base PostgreSQL, tout géré par ArgoCD depuis GitHub."*
 
 ---
 
-### Acte 2 — Introduire le bug manuellement
+### A2 — Introduire le bug
 
-Ouvrir `~/code/ia-ops-argo-app/apps/demo-app/k8s/configmap.yaml` et modifier la `DATABASE_URL` :
+Ouvrir `~/code/ia-ops-argo-app/apps/demo-app/k8s/configmap.yaml` :
 
 ```yaml
-# Avant (sain)
+# Changer :
 DATABASE_URL: "postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb?sslmode=disable"
-
-# Après (cassé)
+# Par :
 DATABASE_URL: "postgres://"
 ```
-
-Commiter et pousser :
 
 ```bash
 cd ~/code/ia-ops-argo-app
@@ -234,106 +234,139 @@ git commit -m "fix: update database endpoint"
 git push
 ```
 
-> *"Un développeur vient de pousser une mauvaise configuration en production. Ça arrive."*
-
-**Ce que voit l'audience dans les secondes qui suivent :**
+> *"Un développeur vient de pousser une mauvaise config en production."*
 
 | Délai | Événement |
 |-------|-----------|
-| ~10s | ArgoCD passe **OutOfSync** → **Synced** |
-| ~15s | Reloader détecte le changement → rolling restart |
-| ~20s | Browser → page **DÉGRADÉE** (rouge, pulsante) |
-| ~20s | ArgoCD UI → app en état **Degraded** |
+| ~10s | ArgoCD **OutOfSync** → **Synced** |
+| ~15s | Reloader → rolling restart |
+| ~20s | Browser → **DÉGRADÉE** (rouge pulsant) |
+| ~20s | ArgoCD UI → **Degraded** |
 
 ```bash
-# Montrer les logs du pod
 kubectl logs -l app=demo-app -n default --tail=5
-# FATAL: DATABASE_URL is invalid: 'postgres://'
+# [ERROR] DATABASE_URL is invalid: 'postgres://'
 ```
 
 ---
 
-### Acte 3 — Lancer l'agent IA
+### A3 — Lancer l'agent IA
 
 ```bash
-cd ~/code/ia-ops-demo-lab/agent
-source .env
-python3 main.py
+cd ~/code/ia-ops-demo-lab/agent && source .env && python3 main.py
 ```
 
-L'agent streame son raisonnement en live dans le terminal :
-
 ```
-🤖 AI Ops Agent
-
-⚠  INCIDENT TRIGGERED
-
-🧠 Agent: Je vais commencer par inspecter l'état du cluster...
-
-🔧 get_cluster_status(namespace=default)
-   → demo-app pods: Running mais Unready
-
-🔧 get_pod_logs(pod_name=demo-app-xxx, previous=true)
-   → FATAL: DATABASE_URL is invalid: 'postgres://'
-
-🔧 read_manifest(path=apps/demo-app/k8s/configmap.yaml)
-   → DATABASE_URL: "postgres://"  ← trouvé
-
-🧠 Agent: Root cause identifiée — DATABASE_URL malformée.
-          Correction en cours...
-
-🔧 apply_fix(path=apps/demo-app/k8s/configmap.yaml, ...)
-   → ✓ commit + push sur ia-ops-argo-app
-
-🔧 check_argocd_sync(app_name=demo-app)
-   → Synced ✓
-
-🔧 wait_for_healthy(label_selector=app=demo-app)
-   → ✓ All pods Running
+🔧 get_cluster_status     → pods Running, status page DEGRADED
+🔧 get_pod_logs           → [ERROR] DATABASE_URL is invalid: 'postgres://'
+🔧 read_manifest          → configmap.yaml : DATABASE_URL: "postgres://"
+🔧 apply_fix              → corrige + commit + push sur ia-ops-argo-app
+🔧 check_argocd_sync      → Synced ✓
+🔧 wait_for_healthy       → pods Running ✓
 
 ✓ Incident résolu en ~90s
 ```
 
-> *"L'agent a lu les logs, trouvé la cause, corrigé le fichier dans Git et attendu la confirmation. Aucun humain n'a été réveillé."*
+---
+
+### A4 — Guérison
+
+**Browser** → **HEALTHY** · **ArgoCD** → **Healthy**
+
+```bash
+git -C ~/code/ia-ops-argo-app log --oneline -3
+# Le commit du fix est là — piste d'audit complète
+```
+
+> *"Fix dans Git. Aucun humain réveillé."*
 
 ---
 
-### Acte 4 — Montrer la guérison
+## Scénario B — Connection pool épuisé
 
-**ArgoCD** → retour en **Healthy** (vert)
+> *Le pool de connexions DB est trop petit pour la charge. Les requêtes s'accumulent, la latence explose.*
 
-**Browser** → page **HEALTHY** (verte)
+### B1 — Montrer l'état sain
 
-```bash
-kubectl get pods -n default
-# demo-app-xxx   1/1   Running   0
+Browser → http://localhost:8081 — carte **Connection Pool** visible : `0/10 connexions · sain`
+
+---
+
+### B2 — Introduire le bug
+
+Ouvrir `~/code/ia-ops-argo-app/apps/demo-app/k8s/configmap.yaml` :
+
+```yaml
+# Changer :
+DB_MAX_CONNECTIONS: "10"
+# Par :
+DB_MAX_CONNECTIONS: "1"
 ```
 
 ```bash
-# Montrer le commit du fix dans Git
+cd ~/code/ia-ops-argo-app
+git add apps/demo-app/k8s/configmap.yaml
+git commit -m "fix: adjust database pool size"
+git push
+```
+
+> *"Quelqu'un a réduit le pool de connexions à 1. Sur une app avec des requêtes concurrentes, c'est catastrophique."*
+
+| Délai | Événement |
+|-------|-----------|
+| ~10s | ArgoCD **OutOfSync** → **Synced** |
+| ~15s | Reloader → rolling restart avec nouveau pool |
+| ~20s | Simulateur de charge tente 4 connexions sur pool de 1 |
+| ~25s | Browser → **DÉGRADÉE** · carte pool : **EXHAUSTED** (rouge) |
+| ~25s | Logs : `[ERROR] DB connection pool exhausted: max_connections=1, wait_count=3` |
+
+```bash
+kubectl logs -l app=demo-app -n default --tail=5
+# [ERROR] DB connection pool exhausted: max_connections=1, wait_count=3
+# [ERROR] Requests queuing — latency severely degraded
+```
+
+---
+
+### B3 — Lancer l'agent IA
+
+```bash
+cd ~/code/ia-ops-demo-lab/agent && source .env && python3 main.py
+```
+
+```
+🔧 get_cluster_status     → pods Running, status page DEGRADED
+🔧 get_pod_logs           → [ERROR] DB connection pool exhausted: max_connections=1
+🔧 read_manifest          → configmap.yaml : DB_MAX_CONNECTIONS: "1"
+🔧 apply_fix              → corrige à "10" + commit + push sur ia-ops-argo-app
+🔧 check_argocd_sync      → Synced ✓
+🔧 wait_for_healthy       → pods Running ✓
+
+✓ Incident résolu en ~90s
+```
+
+---
+
+### B4 — Guérison
+
+**Browser** → **HEALTHY** · carte pool : `0/10 connexions · sain`
+
+```bash
 git -C ~/code/ia-ops-argo-app log --oneline -3
+# Le commit du fix est là
 ```
 
-> *"Le fix est dans Git. La piste d'audit est complète. Le cluster s'est auto-guéri."*
+> *"L'agent a lu les logs, compris la saturation du pool, et restauré la bonne configuration sans intervention humaine."*
 
 ---
 
 ## Réinitialiser entre deux runs
 
-Si tu veux relancer la démo depuis un état sain :
-
-```bash
-cd ~/code/ia-ops-argo-app
-# Remettre la bonne DATABASE_URL dans configmap.yaml
-git add apps/demo-app/k8s/configmap.yaml
-git commit -m "fix: restore database configuration"
-git push
-```
-
-Ou utiliser le script :
 ```bash
 ~/code/ia-ops-demo-lab/scripts/reset.sh
 ```
+
+Restaure `DATABASE_URL` et `DB_MAX_CONNECTIONS` dans `ia-ops-argo-app`, force le sync ArgoCD.
 
 ---
 

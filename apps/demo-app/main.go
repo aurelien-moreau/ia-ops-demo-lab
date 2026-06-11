@@ -212,6 +212,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	state.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Connection", "close") // force new TCP connection each refresh → round-robin across pods
 	if err := tmpl.Execute(w, data); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 	}

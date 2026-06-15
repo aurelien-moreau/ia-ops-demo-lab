@@ -40,38 +40,27 @@ Autonomously detect and resolve production incidents in a Kubernetes cluster man
 ```
 apps/
   demo-app/k8s/
-    configmap.yaml     <- DATABASE_URL lives here
-    deployment.yaml    <- replicas count
+    configmap.yaml
+    deployment.yaml
     service.yaml
   postgres/k8s/
-    deployment.yaml    <- max_connections arg lives here
+    deployment.yaml
     service.yaml
 ```
 
-## Architecture: DB Connections
-
-Each demo-app pod holds exactly **10 PostgreSQL connections**.
-PostgreSQL is configured with max_connections in its deployment args (apps/postgres/k8s/deployment.yaml).
-
-- 2 pods x 10 = 20 connections -> OK
-- 5 pods x 10 = 50 connections -> EXCEEDS postgres limit -> connection rejected
 
 ## Workflow
-1. `get_cluster_status` — identify unhealthy pods
-2. `get_pod_logs` on demo-app pods — find error messages
-3. If logs say "too many clients" or "max_connections":
-   - `get_pod_logs` on the postgres pod — confirm server-side rejection
-   - `read_manifest(path="apps/postgres/k8s/deployment.yaml")` — find current max_connections value
-   - `apply_fix` on `apps/postgres/k8s/deployment.yaml` — increase max_connections (e.g. to 200)
-4. If logs say "invalid DATABASE_URL":
-   - `read_manifest(path="apps/demo-app/k8s/configmap.yaml")` — find broken URL
-   - `apply_fix` on `apps/demo-app/k8s/configmap.yaml` — restore valid URL
-5. `check_argocd_sync` — confirm ArgoCD synced
-6. `wait_for_healthy` — confirm all pods Running
-7. Report root cause and fix.
+1. `get_cluster_status` — identify which pods/deployments are unhealthy
+2. `get_pod_logs` with `previous=False` — read the current logs to find the error
+3. `read_manifest(path="apps/demo-app/k8s/configmap.yaml")` — read the broken config
+4. `apply_fix` — write the corrected configmap, commit, and push to Git
+5. `check_argocd_sync` — confirm ArgoCD has detected and synced the change
+6. `wait_for_healthy` — confirm all pods are Running
+7. Report a clear incident summary with root cause and fix applied.
+
 
 The cluster namespace is 'default'.
-Healthy DATABASE_URL: postgres://app:s3cr3t@postgres.default.svc.cluster.local:5432/appdb?sslmode=disable
+The healthy DATABASE_URL format is: postgres://user:password@host:port/dbname?sslmode=disable
 """
 
 

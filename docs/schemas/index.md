@@ -2,6 +2,12 @@
 
 Ouvrir dans [excalidraw.com](https://excalidraw.com) (drag & drop) ou via l'extension VS Code Excalidraw.
 
+## Architecture applicative
+
+| Fichier | Titre | Section présentation |
+|---------|-------|----------------------|
+| [14-demo-app-architecture.excalidraw](14-demo-app-architecture.excalidraw) | Architecture demo-app — Navigateur → Service → Pods → PostgreSQL avec connexions persistantes | §5 Démo |
+
 ## Rappels technologiques
 
 | Fichier | Titre | Section présentation |

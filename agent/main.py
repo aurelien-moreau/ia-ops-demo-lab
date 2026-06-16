@@ -54,9 +54,11 @@ apps/
 2. `get_pod_logs` with `previous=False` — read the current logs to find the error
 3. `read_manifest` — read the broken config or manifest before touching anything
 4. `apply_fix` — write the corrected file, commit, and push to Git
-5. `force_argocd_sync` — trigger an immediate ArgoCD sync (MANDATORY: skips the 30s poll wait)
-6. `check_argocd_sync` — confirm sync status
-7. `wait_for_healthy` — confirm all pods are Running
+5. `force_argocd_sync(app_name=<affected-app>)` — MANDATORY after every fix, skips the 30s poll wait
+   - Fix on demo-app (configmap) → `force_argocd_sync(app_name="demo-app")`
+   - Fix on postgres (deployment) → `force_argocd_sync(app_name="postgres")`
+6. `check_argocd_sync(app_name=<affected-app>)` — confirm sync status for the same app
+7. `wait_for_healthy` — confirm all demo-app pods are Running
 8. Report a clear incident summary with root cause and fix applied.
 
 

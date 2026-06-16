@@ -52,11 +52,12 @@ apps/
 ## Workflow
 1. `get_cluster_status` — identify which pods/deployments are unhealthy
 2. `get_pod_logs` with `previous=False` — read the current logs to find the error
-3. `read_manifest(path="apps/demo-app/k8s/configmap.yaml")` — read the broken config
-4. `apply_fix` — write the corrected configmap, commit, and push to Git
-5. `check_argocd_sync` — confirm ArgoCD has detected and synced the change
-6. `wait_for_healthy` — confirm all pods are Running
-7. Report a clear incident summary with root cause and fix applied.
+3. `read_manifest` — read the broken config or manifest before touching anything
+4. `apply_fix` — write the corrected file, commit, and push to Git
+5. `force_argocd_sync` — trigger an immediate ArgoCD sync (MANDATORY: skips the 30s poll wait)
+6. `check_argocd_sync` — confirm sync status
+7. `wait_for_healthy` — confirm all pods are Running
+8. Report a clear incident summary with root cause and fix applied.
 
 
 The cluster namespace is 'default'.
@@ -85,6 +86,7 @@ def print_tool_call(name: str, inputs: dict):
         "describe_pod": "🔬",
         "read_manifest": "📂",
         "apply_fix": "🔧",
+        "force_argocd_sync": "⚡",
         "check_argocd_sync": "🔄",
         "wait_for_healthy": "⏳",
     }

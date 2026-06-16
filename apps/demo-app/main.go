@@ -246,9 +246,11 @@ func main() {
 		holdConnections()
 	}
 
-	// Periodically verify connections are alive and reconnect if needed
+	// Periodically verify connections are alive and reconnect if needed.
+	// 3s interval: after a postgres restart ArgoCD takes ~10-15s to redeploy,
+	// so we detect and reconnect within 3s of postgres being ready again.
 	go func() {
-		t := time.NewTicker(15 * time.Second)
+		t := time.NewTicker(3 * time.Second)
 		for range t.C {
 			checkAlive()
 		}

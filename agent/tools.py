@@ -111,6 +111,20 @@ TOOLS = [
         },
     },
     {
+        "name": "force_argocd_sync",
+        "description": "Force ArgoCD to immediately sync an application from Git instead of waiting for the 30s poll interval. Call this right after apply_fix to accelerate deployment.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "ArgoCD application name",
+                    "default": "demo-app",
+                },
+            },
+        },
+    },
+    {
         "name": "check_argocd_sync",
         "description": "Check the ArgoCD sync status of an application to see if the fix has been applied.",
         "input_schema": {
@@ -219,6 +233,24 @@ def apply_fix(path: str, content: str, commit_message: str) -> str:
     return f"✓ File written\n✓ Git add: {git_add}\n✓ Git commit: {git_commit}\n✓ Git push: {git_push}"
 
 
+def force_argocd_sync(app_name: str = "demo-app") -> str:
+    # Annotate the Application to trigger an immediate hard refresh from Git.
+    # ArgoCD picks up the annotation within ~1s and re-syncs without waiting for the 30s poll.
+    refresh = _run([
+        "kubectl", "annotate", "application", app_name,
+        "-n", "argocd",
+        "argocd.argoproj.io/refresh=hard",
+        "--overwrite",
+    ])
+    time.sleep(3)  # let ArgoCD process the annotation and start syncing
+    status = _run([
+        "kubectl", "get", "application", app_name,
+        "-n", "argocd",
+        "-o", "jsonpath={.status.sync.status} {.status.health.status}",
+    ])
+    return f"✓ Hard refresh triggered for '{app_name}'\n{refresh}\nStatus: {status}"
+
+
 def check_argocd_sync(app_name: str = "demo-app") -> str:
     result = _run(
         ["kubectl", "get", "application", app_name, "-n", "argocd", "-o", "jsonpath={.status.sync.status} {.status.health.status}"]
@@ -250,6 +282,7 @@ def execute_tool(name: str, inputs: dict) -> str:
         "describe_pod": describe_pod,
         "read_manifest": read_manifest,
         "apply_fix": apply_fix,
+        "force_argocd_sync": force_argocd_sync,
         "check_argocd_sync": check_argocd_sync,
         "wait_for_healthy": wait_for_healthy,
     }
